@@ -260,8 +260,11 @@ def step_python_env(log):
 
 
 def step_scout_files(log):
+    # Copies from USB: talk.py, scout-persona.txt (system prompt),
+    # voice mods (tts_text_normalizer.py, tts_voice_mods.py),
+    # configs, wake-word files.
     # TODO: copy from USB — paths finalized at pull-it-together
-    log("Scout files copied.")
+    log("Scout files copied (talk.py, persona, voice mods).")
 
 
 def step_models(log):
@@ -270,8 +273,10 @@ def step_models(log):
 
 
 def step_downloads(log):
-    # TODO: Kiwix Wikipedia + OSM maps download URLs at pull-it-together
-    log("Downloads complete.")
+    # TODO: copy Kiwix Wikipedia + OSM maps from USB (512GB drive holds
+    # everything now — no downloading during install). Paths finalized
+    # at pull-it-together.
+    log("Offline data copied from USB.")
 
 
 def step_services(log):

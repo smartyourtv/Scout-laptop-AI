@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Scout Van AI — USB Preparation Tool (Windows)
-Prepares the 256GB flash drive for the ThinkPad install.
+Prepares the 512GB flash drive for the ThinkPad install.
 
 This runs on your Windows home PC. It:
-  1. Finds your 256GB USB drive
+  1. Finds your 512GB USB drive
   2. Formats it and makes it bootable with Ubuntu 24.04
-  3. Downloads all AI models (~150GB) onto it
+  3. Downloads everything (~300GB) onto it — fits easily on 512GB
   4. Copies the Scout installer and files
 
 Then you plug the USB into the ThinkPad and install from there.
@@ -40,13 +40,19 @@ DOWNLOADS = [
      "~8 GB", "God's Eye camera understanding."),
     ("Other tools & models", "various",
      "~12 GB", "Document AI, 3D, utilities."),
-    # Wikipedia (100GB) and maps (50GB) download during ThinkPad install,
-    # not onto the USB — keeps the USB at ~150GB on a 256GB drive.
+    ("Scout persona", "github:smartyourtv/Scout-laptop-AI",
+     "~2 KB", "System prompt — Scout's personality for the van."),
+    ("Voice mods (Python)", "github:smartyourtv/Scout-laptop-AI",
+     "~50 KB", "Ported TTS normalizer, pitch/breath, EQ/reverb."),
+    ("Kiwix Wikipedia (English)", "kiwix://...",
+     "~100 GB", "Offline Wikipedia — now on the USB (512GB drive)."),
+    ("OSM offline maps", "osm://...",
+     "~50 GB", "Offline maps — now on the USB (512GB drive)."),
 ]
 
 STEPS = [
     ("Find USB drive",
-     "Locating your 256GB flash drive.",
+     "Locating your 512GB flash drive.",
      "step_find_usb"),
     ("Format & partition",
      "Setting up the drive (this erases it!).",
@@ -55,7 +61,7 @@ STEPS = [
      "Writing the Ubuntu installer.",
      "step_bootable"),
     ("Download models",
-     "Pulling ~150GB of AI models (takes hours).",
+     "Pulling ~300GB of AI models + offline data (takes hours).",
      "step_downloads"),
     ("Copy installer",
      "Adding the Scout install UI and scripts.",
@@ -84,7 +90,7 @@ class UsbPrepUI:
         header.pack(fill="x", padx=24, pady=(20, 8))
         tk.Label(header, text="Prepare the USB Drive", font=("Sans", 22, "bold"),
                  bg=bg, fg=fg).pack(anchor="w")
-        tk.Label(header, text="Loads the 256GB flash drive for the ThinkPad install.",
+        tk.Label(header, text="Loads the 512GB flash drive for the ThinkPad install.",
                  font=("Sans", 11), bg=bg, fg="#888888").pack(anchor="w")
 
         # ── Instructions ──
@@ -92,9 +98,9 @@ class UsbPrepUI:
         instr.pack(fill="x", padx=24, pady=8)
         tk.Label(instr, font=("Sans", 10), bg=bg, fg=fg, justify="left",
                  text="Before you start:\n"
-                      "• Plug in the 256GB USB flash drive\n"
+                      "• Plug in the 512GB USB flash drive\n"
                       "• Back up anything on it — it will be erased\n"
-                      "• Internet connected (downloading ~150GB)\n"
+                      "• Internet connected (downloading ~300GB)\n"
                       "• Takes several hours — start it overnight").pack(anchor="w")
 
         # ── What downloads ──
@@ -182,7 +188,7 @@ class UsbPrepUI:
         if not messagebox.askyesno(
                 "Confirm",
                 "This will ERASE the USB drive and load it with\n"
-                "the Scout Van AI installer (~150GB).\n\n"
+                "the Scout Van AI installer (~300GB).\n\n"
                 "It takes several hours. Continue?"):
             return
         self.preparing = True
@@ -240,10 +246,10 @@ def run(cmd, log):
 
 
 def step_find_usb(log):
-    """Find the 256GB USB drive."""
+    """Find the 512GB USB drive."""
     global USB_DRIVE
     # TODO: enumerate removable drives via wmic/powershell,
-    # pick the ~256GB one, confirm with user.
+    # pick the ~512GB one, confirm with user.
     # Placeholder — filled at pull-it-together.
     log("TODO: USB detection — fill at pull-it-together.")
     raise RuntimeError("USB detection not yet implemented.")
