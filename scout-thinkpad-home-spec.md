@@ -12,6 +12,22 @@
 4. **No fragility in the voice path.** If the LLM is down, Scout still hears and says so — the pipeline degrades, it doesn't vanish.
 5. **Mirror the phone app globally.** The laptop Scout is the same Scout as the Android app — one assistant, two bodies. Every behavior, fix, and refinement that lands in the app gets ported to the laptop wherever it applies (different code, same behavior). The app is the reference implementation; the parity checklist below is kept current, and nothing ships on the laptop behaving worse than the phone in an area the checklist covers.
 
+### Future-proofing rules (standing — added 2026-10-14, Shawn: "bake these in")
+Every design choice must survive its own dependencies failing. A single hidden dependency with no fallback is a future breakage.
+1. **Bundle, don't fetch.** Everything the van needs rides on the USB / lives on the device. Install and runtime never depend on a live download.
+2. **Local-first, cloud as enhancement.** The van works fully offline. Groq/cloud only add capability, never required.
+3. **Versioned contracts.** The app↔laptop protocol carries a version number. Old client + new server negotiate instead of hard-failing on mismatch.
+4. **Pin everything.** Model versions, dependency versions, API versions. Never pull "latest" at install time.
+5. **Snapshot + self-test + rollback on every update.** Applies to stack updates, app updates, and model swaps — snapshot first, health self-test after, rollback on failure. Never auto-update mid-drive.
+6. **Graceful degradation tiers.** Every feature has fallbacks (e.g., interpreter cascade: van → Groq → on-device). Nothing has a single point of failure.
+7. **Identity decoupled from infrastructure.** Names are settings; connections use device IDs + a stable network address (`scout-van.local`). Renaming never breaks anything.
+8. **Nothing hard-coded.** URLs, ports, limits, names — all settings.
+9. **Diagnostics everywhere.** Every service gets a plain-language health card + one-tap self-test, so breakage shows up immediately instead of becoming a mystery.
+10. **Home PC is staging.** Nothing reaches the van until it already works on the home PC.
+11. **Backup before change.** Personality, memory, and database backed up before any update, with one-tap restore.
+12. **Scoped credentials with a reconnection path.** Each token has minimal permissions and is documented; when one dies, the refresh path gets it back without bricking updates.
+13. **Public/private separation.** No secrets in public repos, ever. Private repos hold the sensitive stuff.
+
 ## OS layer
 - **Minimal install.** No GNOME. Lightweight window manager at most; Scout runs headless by default.
 - **Two modes:**
