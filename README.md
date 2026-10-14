@@ -11,6 +11,8 @@ The phone app (Scout Android) is the face; this repo is the laptop side.
 - `scout-persona.txt` — Scout's system prompt / personality for the van.
 - `outpost_client.py` — Python client for Outpost (Shield/TV-box control) from the ThinkPad.
 - `scout-thinkpad-home-spec.md` — The living spec: architecture, network, multi-instance, wake words, queue, and the app-parity checklist.
+- `name_sync.py` — ThinkPad-side name sync: canonical name store + HTTP sync API (port 8091). Change the name on either body, both share one name. Run `python3 name_sync.py --self-test` to verify.
+- `NAME-SYNC-PROTOCOL.md` — The name-sync wire protocol: message format, endpoints, conflict rule, offline/queue behavior, wake-word rule.
 
 ## Status
 
