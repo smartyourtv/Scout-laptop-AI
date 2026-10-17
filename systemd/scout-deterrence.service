@@ -1,0 +1,14 @@
+[Unit]
+Description=Scout deterrence engine (Frigate events)
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=scout
+WorkingDirectory=/home/hatch/scout
+ExecStart=/home/hatch/scout/venv/bin/python /home/hatch/scout/deterrence.py --serve
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -13,8 +13,13 @@ The phone app (Scout Android) is the face; this repo is the laptop side.
 - `scout-thinkpad-home-spec.md` — The living spec: architecture, network, multi-instance, wake words, queue, and the app-parity checklist.
 - `name_sync.py` — ThinkPad-side name sync: canonical name store + HTTP sync API (port 8091). Change the name on either body, both share one name. Run `python3 name_sync.py --self-test` to verify.
 - `NAME-SYNC-PROTOCOL.md` — The name-sync wire protocol: message format, endpoints, conflict rule, offline/queue behavior, wake-word rule.
+- `parts-interchange-db.json` — Authoritative offline parts table (697 entries). Wired into usb-prep + installer (knowledge manifest) 2026-10-16.
+- `DVR-BACKEND-TEST-PLAN.md` — JOINLGO → Traccar/Frigate test plan: prove backend first, G2-WS observational tests, gated cutover.
+- `PREP-STATUS.md` — ThinkPad prep checkpoint (2026-10-16): what prep is done, what the full build still needs, blockers.
 
 ## Status
 
-Install chain is UI shells with TODO stubs — real logic lands at "pull it together."
-See `scout-thinkpad-home-spec.md` for the full plan.
+PREP done 2026-10-16 (see `PREP-STATUS.md`). Install chain is still shells with
+stubs — unimplemented steps now fail loudly as PREP STUBs instead of silently
+passing. Real logic lands at "pull it together," gated on phone-app lessons
+(Scout-first plan). See `scout-thinkpad-home-spec.md` for the full plan.

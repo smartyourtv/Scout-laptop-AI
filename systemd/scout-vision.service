@@ -1,0 +1,14 @@
+[Unit]
+Description=Scout vision swap helper (on-demand, port 8081)
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=scout
+WorkingDirectory=/home/hatch/scout
+ExecStart=/home/hatch/scout/venv/bin/python /home/hatch/scout/scout-vision.py --serve-stub
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

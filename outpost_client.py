@@ -158,6 +158,31 @@ class OutpostClient:
         return self._post({"action": "searchApp", "package": package, "query": query})
 
 
+def clients_for_voice_command(command_text, registry=None):
+    """
+    Universal Outpost v2.8 integration point: resolve a spoken command's
+    device target through the TV device registry and return ready-to-use
+    OutpostClient objects for the resolved device(s).
+
+    Returns (ResolveResult, [OutpostClient, ...]). Clients are only built
+    for results that name devices ("single" / "all"); for "ambiguous" and
+    "not_found" the list is empty and the caller should ask / report.
+
+    The registry import is lazy and local so this module keeps working
+    standalone (single hardcoded --host) with no registry file present.
+    """
+    from device_registry import DeviceRegistry
+    reg = registry if registry is not None else DeviceRegistry()
+    result = reg.resolve_voice_command(command_text)
+    clients = []
+    if result.kind in ("single", "all"):
+        for entry in result.entries:
+            if entry.get("ip"):
+                clients.append(OutpostClient(entry["ip"],
+                                             port=entry.get("port", OUTPOST_PORT)))
+    return result, clients
+
+
 def _cli():
     p = argparse.ArgumentParser(description="Talk to Outpost on the Shield.")
     p.add_argument("--host", required=True, help="Shield IP on the van LAN")

@@ -1,0 +1,14 @@
+[Unit]
+Description=Scout name sync (canonical name, port 8091)
+After=network.target sound.target
+
+[Service]
+Type=simple
+User=scout
+WorkingDirectory=/home/hatch/scout
+ExecStart=/home/hatch/scout/venv/bin/python /home/hatch/scout/name_sync.py serve --host 0.0.0.0
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
