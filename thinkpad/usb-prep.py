@@ -7,7 +7,7 @@ This runs on your Windows home PC. It:
   1. Finds your 512GB USB drive
   2. Installs Ventoy on it (Ventoy's install IS the format step —
      it creates the boot + data partitions; the drive is ERASED)
-  3. Downloads everything (~160GB) to a staging folder on this PC
+  3. Downloads everything (~220GB) to a staging folder on this PC
   4. Copies the Ubuntu ISO + models + Scout installer onto the drive
 
 Then you plug the USB into the ThinkPad, boot it from the USB, pick the
@@ -33,41 +33,229 @@ import subprocess
 import os
 import sys
 
-# ── Payload sources (verified against live listings, 2026-10-16) ────
-# (local filename [== DOWNLOAD_MANIFEST name], download URL,
-#  expected bytes (informational; the server's Content-Length is the
-#  completion truth), display size, what it is)
+# ── Payload sources (verified against live listings, 2026-10-16; ────
+# creative/voice bundle added same night — "v3")
+# (local filename [== DOWNLOAD_MANIFEST name; flat + unique in the
+#  staging folder], download URL, expected bytes (informational; the
+#  server's Content-Length is the completion truth), display size,
+#  what it is, destination path on the USB relative to its root)
+# A desc starting with "[Group]" marks a multi-file bundle: the GUI
+# list collapses those into one summed row per group.
 PAYLOAD_SOURCES = [
+    # ── Core payloads (destinations unchanged — installer contract) ──
     ("ubuntu-24.04.iso",
      "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso",
      6_300_000_000, "~5.8 GB",
      "Ubuntu 24.04.5.1 LTS desktop ISO — Ventoy boots this on the "
-     "ThinkPad."),
+     "ThinkPad.",
+     "ubuntu-24.04.iso"),
     ("Qwen3.6-35B-A3B-Q3.gguf",
      "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/"
      "Qwen3.6-35B-A3B-UD-Q3_K_M.gguf",
      16_600_710_112, "16.6 GB",
-     "Scout's brain — Qwen3.6-35B-A3B Q3_K_M GGUF (unsloth)."),
+     "Scout's brain — Qwen3.6-35B-A3B Q3_K_M GGUF (unsloth).",
+     "scout-files/payloads/Qwen3.6-35B-A3B-Q3.gguf"),
     ("Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
      "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/"
      "Qwen3VL-8B-Instruct-Q4_K_M.gguf",
      5_027_784_800, "5.0 GB",
      "Vision model (Qwen3-VL-8B) — wound/wiring/DVR photos, via "
-     "llama.cpp, NOT Ollama."),
+     "llama.cpp, NOT Ollama.",
+     "scout-files/payloads/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"),
     ("mmproj-Qwen3VL-8B-Instruct-F16.gguf",
      "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/"
      "mmproj-Qwen3VL-8B-Instruct-F16.gguf",
      1_159_029_824, "1.2 GB",
-     "Vision projector paired with the Qwen3-VL model above."),
+     "Vision projector paired with the Qwen3-VL model above.",
+     "scout-files/payloads/mmproj-Qwen3VL-8B-Instruct-F16.gguf"),
     ("wikipedia_en.zim",
      "https://download.kiwix.org/zim/wikipedia/"
      "wikipedia_en_all_maxi_2026-08.zim",
      119_000_000_000, "~119 GB",
-     "Offline English Wikipedia (Kiwix ZIM, all_maxi 2026-08)."),
+     "Offline English Wikipedia (Kiwix ZIM, all_maxi 2026-08).",
+     "scout-files/payloads/wikipedia_en.zim"),
     ("osm_us.osm.pbf",
      "https://download.geofabrik.de/north-america/us-latest.osm.pbf",
      None, "~11 GB",
-     "Offline OpenStreetMap data for the whole US (Geofabrik)."),
+     "Offline OpenStreetMap data for the whole US (Geofabrik).",
+     "scout-files/payloads/osm_us.osm.pbf"),
+    # ── Apps ──
+    ("ComfyUI-v0.41.0.zip",
+     "https://github.com/comfyanonymous/ComfyUI/archive/refs/tags/"
+     "v0.41.0.zip",
+     13_383_364, "~13 MB",
+     "[Apps] ComfyUI v0.41.0 (pinned release archive) — the creative "
+     "studio app the video/image/music models below run in.",
+     "scout-files/payloads/apps/ComfyUI-v0.41.0.zip"),
+    # ── Video models (ComfyUI) ──
+    ("ltxv-2b-0.9.8-distilled-fp8.safetensors",
+     "https://huggingface.co/Lightricks/LTX-Video/resolve/main/"
+     "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+     4_461_695_684, "4.5 GB",
+     "[Video] LTX-Video 2B FP8 (0.9.8 distilled) — PRIMARY video "
+     "model, fastest in ComfyUI.",
+     "scout-files/payloads/models/video/"
+     "ltxv-2b-0.9.8-distilled-fp8.safetensors"),
+    ("t5xxl_fp8_e4m3fn_scaled.safetensors",
+     "https://huggingface.co/comfyanonymous/flux_text_encoders/"
+     "resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors",
+     5_157_348_688, "5.2 GB",
+     "[Video] T5-XXL FP8 text encoder — required by LTX-Video "
+     "(also serves Flux split workflows).",
+     "scout-files/payloads/models/video/"
+     "t5xxl_fp8_e4m3fn_scaled.safetensors"),
+    ("wan2.2-ti2v-5b-fp8.safetensors",
+     "https://huggingface.co/Kijai/WanVideo_comfy_fp8_scaled/"
+     "resolve/main/TI2V/Wan2_2-TI2V-5B_fp8_e4m3fn_scaled_KJ.safetensors",
+     5_277_255_650, "5.3 GB",
+     "[Video] Wan 2.2 TI2V 5B FP8 (Kijai scaled) — SECONDARY video "
+     "model, max-quality single clips.",
+     "scout-files/payloads/models/video/wan2.2-ti2v-5b-fp8.safetensors"),
+    ("umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+     "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/"
+     "resolve/main/split_files/text_encoders/"
+     "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+     6_735_906_897, "6.7 GB",
+     "[Video] UMT5-XXL FP8 text encoder — required by Wan 2.2.",
+     "scout-files/payloads/models/video/"
+     "umt5_xxl_fp8_e4m3fn_scaled.safetensors"),
+    ("wan2.2_vae.safetensors",
+     "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/"
+     "resolve/main/split_files/vae/wan2.2_vae.safetensors",
+     1_409_400_960, "1.4 GB",
+     "[Video] Wan 2.2 VAE — required by the Wan 2.2 5B model.",
+     "scout-files/payloads/models/video/wan2.2_vae.safetensors"),
+    # ── Music (ComfyUI) ──
+    ("ace_step_v1_3.5b.safetensors",
+     "https://huggingface.co/Comfy-Org/ACE-Step_ComfyUI_repackaged/"
+     "resolve/main/all_in_one/ace_step_v1_3.5b.safetensors",
+     7_699_743_341, "7.7 GB",
+     "[Music] ACE-Step v1 3.5B all-in-one checkpoint (Comfy-Org) — "
+     "full songs with lyrics + vocals; encoder/VAE built in.",
+     "scout-files/payloads/models/music/ace_step_v1_3.5b.safetensors"),
+    # ── Image models (ComfyUI) ──
+    ("sd_xl_base_1.0.safetensors",
+     "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/"
+     "resolve/main/sd_xl_base_1.0.safetensors",
+     6_938_078_334, "6.9 GB",
+     "[Images] SDXL Base 1.0 — primary image model, single file.",
+     "scout-files/payloads/models/image/sd_xl_base_1.0.safetensors"),
+    ("flux1-dev-fp8.safetensors",
+     "https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/"
+     "flux1-dev-fp8.safetensors",
+     17_246_524_772, "17.2 GB",
+     "[Images] FLUX.1-dev FP8 all-in-one checkpoint (Comfy-Org, "
+     "non-gated) — max-quality images.",
+     "scout-files/payloads/models/image/flux1-dev-fp8.safetensors"),
+    # ── Speech to text ──
+    ("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+     "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+     "asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+     487_170_055, "~0.5 GB",
+     "[Speech to text] Parakeet TDT 0.6B v3 int8 (sherpa-onnx) — "
+     "Scout's ears; tarball, the installer unpacks it.",
+     "scout-files/payloads/models/stt/"
+     "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"),
+    ("whisper-large-v3-model.bin",
+     "https://huggingface.co/Systran/faster-whisper-large-v3/"
+     "resolve/main/model.bin",
+     3_087_284_237, "3.1 GB",
+     "[Speech to text] Whisper large-v3 (faster-whisper) — "
+     "transcription model weights.",
+     "scout-files/payloads/models/stt/faster-whisper-large-v3/"
+     "model.bin"),
+    ("whisper-large-v3-config.json",
+     "https://huggingface.co/Systran/faster-whisper-large-v3/"
+     "resolve/main/config.json",
+     2_394, "2 KB",
+     "[Speech to text] Whisper large-v3 config.",
+     "scout-files/payloads/models/stt/faster-whisper-large-v3/"
+     "config.json"),
+    ("whisper-large-v3-tokenizer.json",
+     "https://huggingface.co/Systran/faster-whisper-large-v3/"
+     "resolve/main/tokenizer.json",
+     2_480_617, "2.5 MB",
+     "[Speech to text] Whisper large-v3 tokenizer.",
+     "scout-files/payloads/models/stt/faster-whisper-large-v3/"
+     "tokenizer.json"),
+    ("whisper-large-v3-vocabulary.json",
+     "https://huggingface.co/Systran/faster-whisper-large-v3/"
+     "resolve/main/vocabulary.json",
+     1_068_114, "1.1 MB",
+     "[Speech to text] Whisper large-v3 vocabulary.",
+     "scout-files/payloads/models/stt/faster-whisper-large-v3/"
+     "vocabulary.json"),
+    # ── Upscale + face restore ──
+    ("RealESRGAN_x4plus.pth",
+     "https://github.com/xinntao/Real-ESRGAN/releases/download/"
+     "v0.1.0/RealESRGAN_x4plus.pth",
+     67_040_989, "67 MB",
+     "[Upscale + restore] RealESRGAN x4plus — image/video upscaling.",
+     "scout-files/payloads/models/upscale/RealESRGAN_x4plus.pth"),
+    ("4x-UltraSharp.pth",
+     "https://huggingface.co/Kim2091/UltraSharp/resolve/main/"
+     "4x-UltraSharp.pth",
+     66_961_958, "67 MB",
+     "[Upscale + restore] 4x-UltraSharp — sharper upscaling.",
+     "scout-files/payloads/models/upscale/4x-UltraSharp.pth"),
+    ("GFPGANv1.4.pth",
+     "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/"
+     "GFPGANv1.4.pth",
+     348_632_874, "349 MB",
+     "[Upscale + restore] GFPGAN v1.4 — face restoration.",
+     "scout-files/payloads/models/upscale/GFPGANv1.4.pth"),
+    # ── VieNeu-TTS (Vietnamese voices — Southern dialect support) ──
+    ("vieneu-model.safetensors",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "model.safetensors",
+     1_105_860_992, "1.1 GB",
+     "[VieNeu TTS] VieNeu-TTS model weights (pnnbao-ump).",
+     "scout-files/payloads/models/tts/VieNeu-TTS/model.safetensors"),
+    ("vieneu-config.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "config.json",
+     1_227, "1 KB",
+     "[VieNeu TTS] VieNeu-TTS config.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/config.json"),
+    ("vieneu-generation_config.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "generation_config.json",
+     216, "216 B",
+     "[VieNeu TTS] VieNeu-TTS generation config.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/"
+     "generation_config.json"),
+    ("vieneu-tokenizer.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "tokenizer.json",
+     24_140_239, "24 MB",
+     "[VieNeu TTS] VieNeu-TTS tokenizer.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/tokenizer.json"),
+    ("vieneu-tokenizer_config.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "tokenizer_config.json",
+     12_063_181, "12 MB",
+     "[VieNeu TTS] VieNeu-TTS tokenizer config.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/"
+     "tokenizer_config.json"),
+    ("vieneu-vocab.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "vocab.json",
+     2_776_833, "2.8 MB",
+     "[VieNeu TTS] VieNeu-TTS vocabulary.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/vocab.json"),
+    ("vieneu-special_tokens_map.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "special_tokens_map.json",
+     610, "610 B",
+     "[VieNeu TTS] VieNeu-TTS special tokens map.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/"
+     "special_tokens_map.json"),
+    ("vieneu-voices.json",
+     "https://huggingface.co/pnnbao-ump/VieNeu-TTS/resolve/main/"
+     "voices.json",
+     28_561, "29 KB",
+     "[VieNeu TTS] VieNeu-TTS built-in voice definitions.",
+     "scout-files/payloads/models/tts/VieNeu-TTS/voices.json"),
 ]
 
 # Ventoy (the bootable-maker). Version + SHA-256 verified against the
@@ -80,8 +268,31 @@ VENTOY_ZIP_SHA256 = ("082c478e8c432e1ac653899fcf50e3a4077a2851bc6112b"
 VENTOY_ZIP_SIZE = 16_680_699
 
 # ── What gets downloaded onto the USB (display list) ────────────────
-DOWNLOADS = [(name, url, size, desc) for (name, url, _exp, size, desc)
-             in [(p[0], p[1], p[2], p[3], p[4]) for p in PAYLOAD_SOURCES]]
+# Core payloads list individually; "[Group]" bundles collapse into
+# one summed row per group so the window stays readable.
+def _display_rows():
+    rows, groups, order = [], {}, []
+    for name, url, exp, size, desc, _rel in PAYLOAD_SOURCES:
+        if desc.startswith("[") and "]" in desc:
+            gname = desc[1:desc.index("]")]
+            if gname not in groups:
+                groups[gname] = [0, 0]
+                order.append(gname)
+            groups[gname][0] += exp or 0
+            groups[gname][1] += 1
+        else:
+            rows.append((name, url, size, desc))
+    for gname in order:
+        total, count = groups[gname]
+        disp = (f"~{total / 1e9:.1f} GB" if total >= 100_000_000
+                else f"~{total / 1e6:.0f} MB")
+        rows.append((f"{gname} bundle "
+                     f"({count} file{'s' if count != 1 else ''})", "",
+                     disp, gname))
+    return rows
+
+
+DOWNLOADS = _display_rows()
 
 STEPS = [
     ("Find USB drive",
@@ -94,8 +305,8 @@ STEPS = [
      "Verifying the Ventoy boot + data partitions.",
      "step_bootable"),
     ("Download models",
-     "Pulling ~160GB of installer + AI models + offline data "
-     "(takes hours).",
+     "Pulling ~220GB of installer + AI models + creative studio "
+     "+ offline data (takes hours).",
      "step_downloads"),
     ("Copy installer",
      "Copying the ISO, models, and Scout installer to the drive.",
@@ -135,7 +346,7 @@ class UsbPrepUI:
                  text="Before you start:\n"
                       "• Plug in the 512GB USB flash drive\n"
                       "• Back up anything on it — it will be erased\n"
-                      "• Internet connected (downloading ~160GB)\n"
+                      "• Internet connected (downloading ~220GB)\n"
                       "• Takes several hours — start it overnight").pack(anchor="w")
 
         # ── What downloads ──
@@ -493,10 +704,10 @@ def step_downloads(log):
     manifest is present at size. A file already complete in staging
     is skipped; a partial (.part) resumes where it left off."""
     stage = staging_dir()
-    total_needed = sum(exp or 0 for _n, _u, exp, _s, _d in PAYLOAD_SOURCES)
+    total_needed = sum(src[2] or 0 for src in PAYLOAD_SOURCES)
     free = _shutil_mod.disk_usage(stage).free
     remaining = 0
-    for name, _u, exp, _s, _d in PAYLOAD_SOURCES:
+    for name, _u, exp, *_rest in PAYLOAD_SOURCES:
         have = os.path.join(stage, name)
         if not (os.path.exists(have)
                 and os.path.getsize(have) >= _manifest_min(name)):
@@ -509,7 +720,7 @@ def step_downloads(log):
             "completed downloads are kept, so nothing is lost.")
     log(f"Staging folder: {stage} (total payload ~"
         f"{total_needed / 1e9:.0f} GB)")
-    for name, url, _exp, size_disp, _desc in PAYLOAD_SOURCES:
+    for name, url, _exp, size_disp, _desc, _rel in PAYLOAD_SOURCES:
         dest = os.path.join(stage, name)
         download_file(url, dest, log, min_size=_manifest_min(name),
                       label=f"{name} ({size_disp})")
@@ -526,6 +737,22 @@ def _manifest_min(name):
         if fname == name:
             return min_size
     return 0
+
+
+def payload_usb_rel(name):
+    """Destination of a payload on the USB, relative to the USB
+    root (forward-slash path from PAYLOAD_SOURCES). Core payloads
+    keep their original flat locations (installer contract); the
+    creative/voice bundle lives in payloads/ subfolders."""
+    for src in PAYLOAD_SOURCES:
+        if src[0] == name:
+            return src[5]
+    return "scout-files/payloads/" + name
+
+
+def usb_dest(root, name):
+    """Absolute on-USB path for a staged payload name."""
+    return os.path.join(root, *payload_usb_rel(name).split("/"))
 
 
 def usb_root():
@@ -564,8 +791,7 @@ def copy_payloads_to_usb(log):
     free = _shutil_mod.disk_usage(root).free
     already = 0
     for name, _m in DOWNLOAD_MANIFEST:
-        dest = (os.path.join(root, name) if name.endswith(".iso")
-                else os.path.join(payload_dest, name))
+        dest = usb_dest(root, name)
         if os.path.exists(dest):
             already += os.path.getsize(dest)
     if free < need - already:
@@ -578,11 +804,12 @@ def copy_payloads_to_usb(log):
         if not os.path.exists(src):
             raise RuntimeError(f"Staged payload missing: {src} — run "
                                "the Download step first.")
-        dest = (os.path.join(root, name) if name.endswith(".iso")
-                else os.path.join(payload_dest, name))
+        dest = usb_dest(root, name)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         _copy_big(src, dest, log, name)
     log("Payloads staged: ISO at drive root, models/data in "
-        "scout-files/payloads/.")
+        "scout-files/payloads/ (creative/voice bundle in its "
+        "models/ + apps/ subfolders).")
 
 
 USB_README = """Scout Van AI — ThinkPad install USB (Ventoy)
@@ -591,6 +818,10 @@ Layout of this drive:
   ubuntu-24.04.iso ............ Ubuntu 24.04 LTS installer image.
                                 Ventoy boots it — pick it in the menu.
   scout-files/payloads/ ....... AI models + offline Wikipedia + maps.
+  scout-files/payloads/apps/ .. ComfyUI (creative studio app).
+  scout-files/payloads/models/  Creative + voice models by kind:
+                                video/ image/ music/ stt/ tts/
+                                upscale/ (ComfyUI + speech models).
   scout-files/scout-installer.py  Scout installer (run after Ubuntu).
   scout-files/knowledge/ ...... Manuals, first aid, parts database.
 
@@ -1035,8 +1266,7 @@ def step_verify(log):
         if not os.path.exists(path) or os.path.getsize(path) < min_size:
             problems.append(f"knowledge missing/undersized: {rel}")
     for name, min_size in DOWNLOAD_MANIFEST:
-        path = (os.path.join(root, name) if name.endswith(".iso")
-                else os.path.join(usb_files, "payloads", name))
+        path = usb_dest(root, name)
         if not os.path.exists(path) or os.path.getsize(path) < min_size:
             problems.append(f"payload missing/undersized on USB: {name}")
     if not os.path.exists(os.path.join(root, "USB-README.txt")):
@@ -1068,6 +1298,34 @@ DOWNLOAD_MANIFEST = [
     ("mmproj-Qwen3VL-8B-Instruct-F16.gguf", 1_000_000_000),
     ("wikipedia_en.zim", 50_000_000_000),
     ("osm_us.osm.pbf", 5_000_000_000),
+    # Creative/voice bundle (v3, 2026-10-16) — floors are ~90% of the
+    # verified sizes; the server's Content-Length is the real check.
+    ("ComfyUI-v0.41.0.zip", 5_000_000),
+    ("ltxv-2b-0.9.8-distilled-fp8.safetensors", 4_000_000_000),
+    ("t5xxl_fp8_e4m3fn_scaled.safetensors", 4_600_000_000),
+    ("wan2.2-ti2v-5b-fp8.safetensors", 4_700_000_000),
+    ("umt5_xxl_fp8_e4m3fn_scaled.safetensors", 6_000_000_000),
+    ("wan2.2_vae.safetensors", 1_200_000_000),
+    ("ace_step_v1_3.5b.safetensors", 7_000_000_000),
+    ("sd_xl_base_1.0.safetensors", 6_500_000_000),
+    ("flux1-dev-fp8.safetensors", 16_000_000_000),
+    ("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+     400_000_000),
+    ("whisper-large-v3-model.bin", 2_900_000_000),
+    ("whisper-large-v3-config.json", 1_000),
+    ("whisper-large-v3-tokenizer.json", 2_000_000),
+    ("whisper-large-v3-vocabulary.json", 900_000),
+    ("RealESRGAN_x4plus.pth", 60_000_000),
+    ("4x-UltraSharp.pth", 60_000_000),
+    ("GFPGANv1.4.pth", 300_000_000),
+    ("vieneu-model.safetensors", 1_000_000_000),
+    ("vieneu-config.json", 500),
+    ("vieneu-generation_config.json", 100),
+    ("vieneu-tokenizer.json", 20_000_000),
+    ("vieneu-tokenizer_config.json", 10_000_000),
+    ("vieneu-vocab.json", 2_000_000),
+    ("vieneu-special_tokens_map.json", 300),
+    ("vieneu-voices.json", 20_000),
 ]
 
 
@@ -1330,6 +1588,43 @@ def self_test():
         if src[2] is not None and src[2] < min_size:
             sizes_ok = False
     check("expected payload sizes meet manifest minimums", sizes_ok)
+    # v3 bundle: destinations sane + core locations unchanged +
+    # staging names unique + every source has a manifest entry +
+    # the whole bundle fits the 512GB drive.
+    rel_ok = all(len(src) == 6 and ".." not in src[5]
+                 and (src[5] == "ubuntu-24.04.iso"
+                      or src[5].startswith("scout-files/payloads/"))
+                 for src in PAYLOAD_SOURCES)
+    check("payload USB destinations are the ISO at root or inside "
+          "scout-files/payloads/", rel_ok)
+    core_ok = True
+    for _n, _r in [
+            ("ubuntu-24.04.iso", "ubuntu-24.04.iso"),
+            ("Qwen3.6-35B-A3B-Q3.gguf",
+             "scout-files/payloads/Qwen3.6-35B-A3B-Q3.gguf"),
+            ("Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
+             "scout-files/payloads/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"),
+            ("mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+             "scout-files/payloads/mmproj-Qwen3VL-8B-Instruct-F16.gguf"),
+            ("wikipedia_en.zim",
+             "scout-files/payloads/wikipedia_en.zim"),
+            ("osm_us.osm.pbf",
+             "scout-files/payloads/osm_us.osm.pbf")]:
+        if payload_usb_rel(_n) != _r:
+            core_ok = False
+    check("core payload locations unchanged (installer contract)",
+          core_ok)
+    _names = [src[0] for src in PAYLOAD_SOURCES]
+    check("payload staging names unique",
+          len(_names) == len(set(_names)))
+    rev_ok = all(any(fname == src[0]
+                     for fname, _m in DOWNLOAD_MANIFEST)
+                 for src in PAYLOAD_SOURCES)
+    check("every payload source has a manifest entry", rev_ok)
+    total_exp = sum(src[2] or 0 for src in PAYLOAD_SOURCES)
+    check("total payload fits the 512GB drive (<= 460GB)",
+          total_exp <= 460_000_000_000,
+          f"total={total_exp / 1e9:.0f}GB")
     check("Ventoy pinned (version + sha256 + URL)",
           bool(VENTOY_VERSION) and len(VENTOY_ZIP_SHA256) == 64
           and VENTOY_ZIP_URL.endswith(".zip"))
