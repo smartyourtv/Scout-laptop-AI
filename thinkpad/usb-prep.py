@@ -14,9 +14,11 @@ Then you plug the USB into the ThinkPad, boot it from the USB, pick the
 Ubuntu ISO in the Ventoy menu, install Ubuntu onto the ThinkPad's SSD,
 and run the Scout installer from scout-files/ on the same drive.
 
-Requires: Python 3 on Windows (python.org, check "Add to PATH") and
-Administrator rights (the tool relaunches itself elevated).
-Usage: double-click start-usb-prep.bat, or: python usb-prep.py
+User path: install UsbPrep-Setup.exe (no Python needed).
+Developer path: Python 3 on Windows (python.org, check "Add to PATH")
+and Administrator rights (the tool relaunches itself elevated).
+Usage: run the installed UsbPrep, or double-click start-usb-prep.bat,
+or: python usb-prep.py
 
 REAL-GUI REWORK (2026-10-16): the previous GUI painted dry-run format
 plans green while writing nothing, and the downloads step only checked
@@ -612,10 +614,46 @@ def _prep_stub(name, log):
     raise RuntimeError(f"{name} is a PREP STUB — not implemented.")
 
 
+# ══════════════════════════════════════════════════════════════════
+# Path resolution — source run vs installed (PyInstaller) run.
+# Source run (developer): exactly the historical layout — data files
+# are resolved relative to this file and its parent (the build tree).
+# Installed run (frozen UsbPrep.exe): Inno Setup installs the data
+# tree NEXT TO the exe — <install>/thinkpad/… and <install>/files/… —
+# so module dir := <install>/thinkpad and build root := <install>.
+# Downloads stage in the install folder (per-user install => the
+# folder is user-writable); NEVER inside the PyInstaller temp dir.
+# ══════════════════════════════════════════════════════════════════
+
+def _frozen():
+    return bool(getattr(sys, "frozen", False))
+
+
+def _install_dir():
+    """Folder containing UsbPrep.exe (frozen runs only)."""
+    return os.path.dirname(os.path.abspath(sys.executable))
+
+
+def _module_dir():
+    """Folder the tool's sibling data files are resolved against."""
+    if _frozen():
+        return os.path.join(_install_dir(), "thinkpad")
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _build_root():
+    """Build-tree root: parent of thinkpad/, holds files/ knowledge."""
+    if _frozen():
+        return _install_dir()
+    return os.path.dirname(_module_dir())
+
+
 def staging_dir():
-    """Where downloads land on the prep PC: <tool folder>/usb-prep-downloads/."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(here, "usb-prep-downloads")
+    """Where downloads land on the prep PC: <tool folder>/usb-prep-downloads/.
+    Frozen: the install folder (writable, per-user install) — never
+    the PyInstaller extraction temp dir, which is deleted at exit."""
+    base = _install_dir() if _frozen() else _module_dir()
+    path = os.path.join(base, "usb-prep-downloads")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -1193,11 +1231,11 @@ def step_copy_installer(log):
         raise RuntimeError("USB drive not found — run Find USB drive first.")
     copy_payloads_to_usb(log)
     import shutil as _shutil
-    build_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    build_root = _build_root()
     usb_root_path = usb_root()
     usb_files = os.path.join(usb_root_path, "scout-files")
     os.makedirs(usb_files, exist_ok=True)
-    here = os.path.dirname(os.path.abspath(__file__))
+    here = _module_dir()
     for script in ("scout-installer.py", "scout-vision.py"):
         src = os.path.join(here, script)
         if not os.path.exists(src):
@@ -1390,21 +1428,29 @@ def _parse_lsblk_size(text):
     return round(num * mult.get(unit, 1))
 
 
-def is_system_disk(device, devices=None):
+def is_system_disk(device, devices=None, log=None):
     """True if `device` holds the root filesystem (never formattable)."""
+    log = log or (lambda m: None)
     devices = devices if devices is not None else list_block_devices()
     for d in devices:
         if d.get("device") == device and d.get("mountpoint") == "/":
             return True
     # Also refuse the disk backing / by name heuristic on this VM.
+    # LC-3 fix (2026-10-17): a findmnt failure used to be swallowed by
+    # a bare except-pass, silently skipping this safety heuristic.
+    # It is now logged — the remaining gates (explicit device,
+    # removable check, typed ERASE confirmation) still apply, but the
+    # skip is never silent.
     try:
         out = subprocess.run(["findmnt", "-n", "-o", "SOURCE", "/"],
                              capture_output=True, text=True, timeout=10)
         root_src = (out.stdout or "").strip()
         if root_src and device and root_src.startswith(device):
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"WARNING: findmnt system-disk check failed ({e}) — that "
+            "safety heuristic was SKIPPED for this decision; the "
+            "other format gates still apply.")
     return False
 
 
@@ -1423,12 +1469,18 @@ def format_drive(device, confirm="", dry_run=True, log=None):
         raise RuntimeError(f"Refusing to format: {device} not found.")
     if not match.get("removable"):
         raise RuntimeError(f"Refusing to format: {device} is not removable.")
-    if is_system_disk(device, devices):
+    if is_system_disk(device, devices, log=log):
         raise RuntimeError(f"Refusing to format: {device} is the system disk.")
     expected = f"ERASE {device}"
+    # LC-4 fix (2026-10-17): the mkfs command used to carry a
+    # parenthetical "(or {device}p1 on NVMe-style)" — not runnable,
+    # and it sat in the list the REAL path executes. Compute the real
+    # partition name instead: devices ending in a digit (nvme0n1,
+    # mmcblk0) take a "p" separator, the rest take the number bare.
+    part = device + ("p1" if device[-1:].isdigit() else "1")
     commands = [
         f"parted {device} --script mklabel gpt mkpart scoutfat fat32 1MiB 100%",
-        f"mkfs.vfat -F 32 -n SCOUTUSB {device}1 (or {device}p1 on NVMe-style)",
+        f"mkfs.vfat -F 32 -n SCOUTUSB {part}",
     ]
     plan = {"device": device, "dry_run": dry_run, "commands": commands,
             "size_gb": match.get("size_gb")}
@@ -1451,7 +1503,7 @@ def write_bootable_iso(device, iso_path, confirm="", dry_run=True, log=None):
     log = log or (lambda m: None)
     if not device:
         raise RuntimeError("Refusing ISO write: no device given.")
-    if is_system_disk(device):
+    if is_system_disk(device, log=log):
         raise RuntimeError("Refusing ISO write: system disk.")
     expected = f"ERASE {device}"
     cmd = (f"dd if={iso_path} of={device} bs=4M status=progress "
@@ -1477,8 +1529,8 @@ def verify_download_manifest(search_roots=None, log=None):
     Returns the list of missing/undersized filenames ([] = complete)."""
     log = log or (lambda m: None)
     roots = list(search_roots or [])
-    here = os.path.dirname(os.path.abspath(__file__))
-    build_root = os.path.dirname(here)
+    here = _module_dir()
+    build_root = _build_root()
     roots += [here, build_root,
               os.path.join(build_root, "thinkpad"),
               os.path.join(build_root, "files"),
@@ -1660,12 +1712,15 @@ if __name__ == "__main__":
             "click YES on the Windows prompt that appears.")
         _ok = relaunch_elevated()
         if not _ok:
+            _how = ("right-click UsbPrep and choose 'Run as "
+                    "administrator'" if _frozen() else
+                    "right-click start-usb-prep.bat and choose "
+                    "'Run as administrator'")
             messagebox.showerror(
                 "Administrator needed",
                 "The Administrator prompt was declined, so the "
                 "drive can't be made bootable.\n\nRe-run the tool "
-                "and click YES, or right-click start-usb-prep.bat "
-                "and choose 'Run as administrator'.")
+                f"and click YES, or {_how}.")
             _root.destroy()
             _sys.exit(1)
         _root.destroy()
