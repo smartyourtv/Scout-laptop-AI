@@ -1,0 +1,137 @@
+# ══════════════════════════════════════════════════════════════════
+# Build UsbPrep-Setup.exe — Scout USB Prep Windows installer.
+#
+# PyInstaller does NOT cross-compile, so the exe is built here on a
+# real Windows runner (windows-latest), never faked on Linux.
+#
+# Pipeline: usb-prep self-tests (GATE — packaging does not start if
+# they fail) → stage the data tree → fetch the manual PDFs via the
+# manuals library's own download script → PyInstaller (single-file
+# windowed UsbPrep.exe) → Inno Setup (per-user UsbPrep-Setup.exe)
+# → build artifact, and a GitHub Release when a tag is given.
+#
+# Repo path: .github/workflows/build-usbprep-setup.yml
+# Triggers: manual (workflow_dispatch; set release_tag to also cut a
+# release) or pushing a tag like usbprep-v3.0.
+# ══════════════════════════════════════════════════════════════════
+name: Build UsbPrep-Setup.exe
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "If set (e.g. usbprep-v3.0), publish a release with the installer attached"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "usbprep-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: GATE — usb-prep self-tests must pass before packaging
+        run: python thinkpad/usb-prep.py --self-test
+
+      - name: Stage the installer data tree
+        shell: pwsh
+        run: |
+          $data = "build/installer-data"
+          New-Item -ItemType Directory -Force "$data/thinkpad" | Out-Null
+          New-Item -ItemType Directory -Force "$data/files" | Out-Null
+          # Sibling files usb-prep.py resolves from its module dir:
+          Copy-Item thinkpad/scout-installer.py     "$data/thinkpad/"
+          Copy-Item thinkpad/van-knowledge-base.md  "$data/thinkpad/"
+          Copy-Item scout-vision.py                 "$data/thinkpad/"
+          Copy-Item parts-interchange-db.json       "$data/thinkpad/"
+          # Knowledge tree (libraries + manuals) from files/:
+          Copy-Item files/* "$data/files/" -Recurse
+
+      - name: "Fetch the manual PDFs (library design: fetched, never stored)"
+        shell: bash
+        run: |
+          cd build/installer-data/files/van-manuals
+          bash download-manuals.sh || true
+          ls -la
+
+      - name: Verify the manuals payload honestly (warn, never hide)
+        shell: pwsh
+        run: |
+          $m = "build/installer-data/files/van-manuals"
+          $need = @(
+            @("van-manuals-inventory.md", 1000),
+            @("giandel-ps-1500sar-ps-2000sar-manual.pdf", 500000),
+            @("giandel-ps-1500sar-ps-2000sar-manual-summary.md", 1000),
+            @("dvr-mdvr-manual-summary.md", 1000),
+            @("suner-sp-30a-mppt-manual-summary.md", 1000),
+            @("vevor-dc-dc-charger-manual-summary.md", 1000),
+            @("rooftop-ac-tr-l02-manual-summary.md", 1000)
+          )
+          $bad = @()
+          foreach ($n in $need) {
+            $p = Join-Path $m $n[0]
+            if (-not (Test-Path $p) -or (Get-Item $p).Length -lt $n[1]) { $bad += $n[0] }
+          }
+          if ($bad.Count -gt 0) {
+            Write-Host "::warning::Manuals payload INCOMPLETE in this build: $($bad -join ', '). The installer's copy step will fail loudly on the prep PC until the full manuals tree is present (see files/van-manuals/download-manuals.sh)."
+          } else {
+            Write-Host "Manuals payload complete."
+          }
+
+      - name: PyInstaller — UsbPrep.exe (single file, windowed)
+        run: pyinstaller thinkpad/windows-installer/UsbPrep.spec --noconfirm --distpath dist --workpath build/pyinstaller
+
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+          }
+          iscc /? | Select-Object -First 2
+
+      - name: Inno Setup — UsbPrep-Setup.exe
+        shell: pwsh
+        run: iscc /DDataDir=build\installer-data thinkpad\windows-installer\UsbPrep-Setup.iss
+
+      - name: Upload the installer as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: UsbPrep-Setup
+          path: dist-installer/UsbPrep-Setup.exe
+          if-no-files-found: error
+
+      - name: Attach the installer to a release (tag push or manual tag)
+        if: startsWith(github.ref, 'refs/tags/usbprep-') || inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          name: Scout USB Prep ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          files: dist-installer/UsbPrep-Setup.exe
+          fail_on_unmatched_files: true
+          body: |
+            **Scout USB Prep — Windows installer (UsbPrep-Setup.exe)**
+
+            Per-user install, no Python needed. Installs Scout USB Prep
+            with Start Menu + Desktop shortcuts; uninstall in
+            Windows Settings > Apps.
+
+            The installer is unsigned, so Windows SmartScreen will warn
+            on first run: click **More info → Run anyway**.
+
+            The app itself asks for Administrator when it opens —
+            making the USB drive bootable requires it.
