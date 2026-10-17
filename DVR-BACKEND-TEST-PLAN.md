@@ -10,7 +10,7 @@ Rule: **prove the backend FIRST, cut over SECOND.**
 | Unit | Role | Login |
 |---|---|---|
 | Van DVR — JOINLGO 4CH, Code **J2-4GW-AF**, 12V/24V (installed, live) | The working security system. Observational only until cutover. | Admin password **KNOWN** (Shawn has it) |
-| Spare DVR — 4CH Mobile DVR, Code **G2-WS**, 8-36V | Test target (more similar to van unit). Powered + on network since 2026-10-16. | Admin password **reset + forgotten** — JOINLGO contacted for reset. **Observational only** until they reply. |
+| Spare DVR — 4CH Mobile DVR, Code **G2-WS**, 8-36V | Test target (more similar to van unit). Powered + on network since 2026-10-16. | Admin password was reset + forgotten, but **JOINLGO replied 2026-10-16 (19:05 PDT)**: menu login via the **"super" account**, password provided to Shawn via his Amazon seller messages (**value deliberately NOT stored in any file**). **Observational only until Shawn verifies the super login works on the spare** — then settings-change tests are unlocked (see gate below). |
 
 Both are provisioned to CMSV7 server **47.88.8.31**.
 Do NOT publish or repeat label credentials / IMEI anywhere.
@@ -51,10 +51,21 @@ so the live DVR is never the first test subject.
    field? RTSP / local-web toggles? Protocol selection (JT808)?
    Reading menus needs no password change; *changing* settings does — see gate.
 
-**Settings-change gate:** re-pointing / protocol changes need the Admin login.
-- If JOINLGO replies with a reset for the G2-WS → run settings tests on the spare.
-- If not → settings tests run on the **live van DVR only with Shawn's explicit
-  go-ahead** (risk: disturbing the working security system). Default is NO.
+**Settings-change gate:** re-pointing / protocol changes need a menu login.
+- **JOINLGO replied 2026-10-16 (19:05 PDT)** — after first answering with the
+  CMSV7 platform account (17:41 PDT, a misunderstanding of the request), they
+  clarified the DVR *menu* login: use the **"super" account**; the password
+  was provided to Shawn in his Amazon seller messages and is **not stored in
+  any file/report/memory**.
+- **Status: settings-change tests (server re-pointability, protocol changes)
+  are READY to run on the G2-WS spare as soon as Shawn confirms the super
+  login works on the unit.** No agent attempts the login (no value held here,
+  no LAN access).
+- Only if the super login turns out not to work does the old fallback apply:
+  settings tests on the **live van DVR only with Shawn's explicit go-ahead**
+  (risk: disturbing the working security system). Default is NO. The Phase 2
+  cutover gate is unchanged — it still needs Shawn's explicit go-ahead at
+  the time.
 
 ## Platform + local path status — 2026-10-16 evening (Shawn-invited poke-around)
 
@@ -71,9 +82,12 @@ phone/PC) opens the CMSV7 portal for 47.88.8.31, signs in with the credentials
 he sent Oct 16, and reports/screenshots only: does the G2-WS spare show
 online, its status, and any GPS position shown. The CMSV7 phone app with the
 same account is an equally valid surface. **These platform credentials are
-NOT the G2-WS OSD Admin password** — that password is different, still
-forgotten, JOINLGO still contacted; platform login (if it works) does not
-unlock local settings changes, and the settings-change gate above stands.
+NOT the G2-WS OSD Admin password** — that password is different and was
+forgotten; JOINLGO has since replied with the **"super" account menu login**
+(see the settings-change gate above — password held by Shawn only, stored
+nowhere here). Platform login (if it works) does not itself unlock local
+settings changes; settings changes ride on the super-account login once
+Shawn verifies it on the spare.
 
 **Local path: NOT RUN — no local address, no LAN vantage. Nothing claimed.**
 We still have no 192.168.x.x address for the G2-WS spare, and the agent VM is
@@ -82,7 +96,14 @@ port scan has been run and no local results exist. Ready to run the moment
 BOTH exist — (a) the spare's local IP (from the router's client list, the
 CMSV7 app's device details, or the DVR's own network menu on a BCPA10
 monitor) and (b) a LAN-side machine to run from (ThinkPad when installed, or
-Shawn's home PC on the same network):
+Shawn's home PC on the same network).
+**Update 2026-10-16, 19:32 PDT:** Shawn confirmed the CMSV7 web portal DOES
+load from his phone — http://47.88.8.31/808gps/login.html ("Active Security
+Cloud Platform," after Chrome's "not secure" interstitial; login has a
+4-digit CAPTCHA field; footer: platform version 7.37.2_20260710). So the
+portal is alive and only the agent-browser route is blocked. Shawn logging
+in himself + reporting whether the G2-WS spare shows online is the working
+platform-check path. (Do NOT tell JOINLGO the portal is down — it isn't.)
 1. `nmap -sV -p 554,80,8080,808gps-range <spare-ip>` — full: `nmap -sV <spare-ip>`
    (record every open port; 554 = RTSP candidate, 80/8080 = local web).
 2. RTSP probe on any open 554: `ffprobe rtsp://<spare-ip>/` plus the common
