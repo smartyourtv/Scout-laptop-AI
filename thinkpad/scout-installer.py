@@ -39,11 +39,14 @@ STEPS = [
     ("AI models",
      "Copying Qwen, Parakeet, and voice models from USB.",
      "step_models"),
+    ("Creative bundle",
+     "Unpacking ComfyUI; linking video, image, music, and voice models.",
+     "step_creative_bundle"),
     ("Knowledge libraries",
      "Copying manuals + first aid, troubleshooting, repair guides.",
      "step_knowledge"),
-    ("Downloading extras",
-     "Fetching Wikipedia and offline maps (needs internet).",
+    ("Offline extras",
+     "Copying Wikipedia and offline maps from the USB.",
      "step_downloads"),
     ("Services",
      "Setting up auto-start, wake word, and van Wi-Fi.",
@@ -85,7 +88,7 @@ class InstallerUI:
                  text="Before you start:\n"
                       "• Ubuntu 24.04 is installed on the ThinkPad\n"
                       "• This USB drive is plugged in\n"
-                      "• Internet is connected (for Wikipedia + maps)\n"
+                      "• Wikipedia + maps ride this USB — no big downloads\n"
                       "• About 45 minutes — mostly copying files").pack(anchor="w")
 
         # ── Progress list ──
@@ -235,16 +238,78 @@ def run(cmd, log):
         raise RuntimeError(f"Command failed (exit {proc.returncode}): {cmd}")
 
 
+def _capture(cmd):
+    """Run a command, return (returncode, combined output)."""
+    proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
 def step_system_check(log):
-    # Disk space: need ~300GB free on the target drive
+    # Disk space, recomputed 2026-10-17 from usb-prep.py
+    # PAYLOAD_SOURCES (the old "≥280GB / ~300GB" figures predated the
+    # corrected manifest). Payload bytes landing on this drive:
+    # core ≈152.8GB (main model 16.6 + vision 5.0 + mmproj 1.2 +
+    # Wikipedia 119 + OSM ~11) + v3 creative ≈60.1GB (video 23.0 +
+    # image 24.2 + music 7.7 + STT 3.6 + TTS 1.15 + upscale 0.5 +
+    # ComfyUI 0.01) ≈ 213GB installed. Threshold: 240GB = the payload
+    # + headroom for the venv, package installs, and ComfyUI's
+    # extracted tree.
     total, used, free = shutil.disk_usage("/")
     free_gb = free // (1024 ** 3)
     log(f"Free disk: {free_gb}GB")
-    if free_gb < 280:
+    if free_gb < 240:
         raise RuntimeError(
-            f"Need at least 280GB free, found {free_gb}GB.")
-    # TODO: check RAM, GPU during pull-it-together
-    log("System check passed.")
+            f"Need at least 240GB free, found {free_gb}GB.")
+    # RAM + GPU — REAL checks (2026-10-17 dry-run audit). This step's
+    # label promises disk + memory + GPU, but it used to verify disk
+    # only and still log "System check passed" — a partial check
+    # painted as a full pass. Now every promised item is verified, and
+    # anything that cannot be verified FAILS the step loudly instead.
+    mem_total_kb = None
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    mem_total_kb = int(line.split()[1])
+                    break
+    except OSError:
+        mem_total_kb = None
+    if not mem_total_kb:
+        raise RuntimeError(
+            "System check INCOMPLETE: could not read /proc/meminfo — "
+            "RAM NOT verified, refusing to report a pass.")
+    ram_gb = mem_total_kb // (1024 * 1024)
+    log(f"RAM: {ram_gb}GB")
+    if ram_gb < 16:
+        raise RuntimeError(f"Need at least 16GB RAM, found {ram_gb}GB.")
+    if not shutil.which("nvidia-smi"):
+        raise RuntimeError(
+            "System check INCOMPLETE: nvidia-smi not found — GPU NOT "
+            "verified, refusing to report a pass. Install the NVIDIA "
+            "driver, then re-run.")
+    rc, out = _capture(
+        "nvidia-smi --query-gpu=name,memory.total "
+        "--format=csv,noheader,nounits")
+    if rc != 0 or not out.strip():
+        raise RuntimeError(
+            f"System check INCOMPLETE: nvidia-smi failed "
+            f"({out.strip()}) — GPU NOT verified, refusing to report "
+            "a pass.")
+    gpu_line = out.strip().splitlines()[0]
+    try:
+        gpu_name, gpu_mem_raw = gpu_line.rsplit(",", 1)
+        gpu_mem_mib = int(gpu_mem_raw.strip())
+        gpu_name = gpu_name.strip()
+    except (ValueError, IndexError):
+        raise RuntimeError(
+            f"System check INCOMPLETE: could not parse GPU info "
+            f"({gpu_line!r}) — refusing to report a pass.")
+    log(f"GPU: {gpu_name}, {gpu_mem_mib} MiB VRAM")
+    if gpu_mem_mib < 15000:
+        raise RuntimeError(
+            f"Need ~16GB VRAM for the main model, found "
+            f"{gpu_mem_mib} MiB.")
+    log("System check passed (disk + RAM + GPU all verified).")
 
 
 def step_system_packages(log):
@@ -253,14 +318,55 @@ def step_system_packages(log):
         "portaudio19-dev ffmpeg git curl", log)
 
 
+def _find_requirements(log):
+    """Locate a requirements.txt for the venv: beside this installer
+    (it rides the USB inside scout-files/) or at the root of the USB
+    scout-files tree. Returns a path or None."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    beside = os.path.join(here, "requirements.txt")
+    if os.path.isfile(beside):
+        return beside
+    try:
+        usb_tree = find_usb_dir(log, "scout-files")
+    except RuntimeError:
+        return None
+    cand = os.path.join(usb_tree, "requirements.txt")
+    return cand if os.path.isfile(cand) else None
+
+
 def step_python_env(log):
+    # DRY-RUN AUDIT FIX (2026-10-17): this step used to create the
+    # venv, skip the package install entirely (it was a TODO), and
+    # still log "Python environment ready" — the GUI then painted it
+    # green for work that never ran (same class as the usb-prep
+    # dry-run bug). Now: packages install for real from a staged
+    # requirements.txt and are verified with pip check; with no
+    # requirements file the step FAILS LOUDLY instead of claiming
+    # ready.
     home = os.path.expanduser("~")
     venv = os.path.join(home, "scout", "venv")
     os.makedirs(os.path.dirname(venv), exist_ok=True)
     if not os.path.exists(venv):
         run(f"python3 -m venv {venv}", log)
-    # TODO: pip install list finalized at pull-it-together
-    log("Python environment ready.")
+    venv_python = os.path.join(venv, "bin", "python")
+    if not os.path.isfile(venv_python):
+        raise RuntimeError(
+            f"venv python missing after create: {venv_python}")
+    req = _find_requirements(log)
+    if not req:
+        raise RuntimeError(
+            "Python packages NOT installed — PLANNED ONLY: no "
+            "requirements.txt found beside the installer or in the "
+            "USB scout-files/ tree. Stage one (usb-prep) and re-run; "
+            "this step refuses to report 'ready' without a real "
+            "install.")
+    log(f"Installing Python packages from {req} …")
+    run(f'"{venv_python}" -m pip install -r "{req}"', log)
+    run(f'"{venv_python}" -m pip check', log)
+    rc, out = _capture(f'"{venv_python}" -m pip freeze')
+    n_pkgs = len([ln for ln in out.splitlines() if "==" in ln])
+    log(f"Python environment ready: venv verified, {n_pkgs} packages "
+        f"installed from {os.path.basename(req)}, pip check clean.")
 
 
 def _prep_stub(name, log):
@@ -285,15 +391,33 @@ def step_scout_files(log):
     # re-checked when Build 1 completes.
     src = find_usb_dir(log, "scout-files")
     dest = os.path.join(os.path.expanduser("~"), "scout")
-    manifest = copy_tree_verified(src, dest, log, subdir=None)
+    # Issue A fix (2026-10-17): exclude payloads/ + knowledge/ — both
+    # subtrees have their own dedicated copy steps (models/offline
+    # pull from payloads/; step_knowledge copies knowledge/). Copying
+    # them here too duplicated ~219GB of payload data into ~/scout/
+    # (dead weight + roughly double the big-file copy time).
+    manifest = copy_tree_verified(src, dest, log, subdir=None,
+                                  exclude=("payloads", "knowledge"))
+    # DRY-RUN AUDIT FIX (2026-10-17): an empty (or brain-less) source
+    # tree used to sail through — zero files copied, step still green.
+    if not manifest:
+        raise RuntimeError(
+            "Scout brain copy copied NOTHING — the USB scout-files/ "
+            "tree is empty. Refusing to report success.")
+    if not any(e["path"] == "talk.py" for e in manifest):
+        raise RuntimeError(
+            "Scout brain copy has no talk.py — the USB scout-files/ "
+            "tree is not the Scout brain payload. Refusing to report "
+            "success.")
     write_manifest(dest, manifest, log)
     log(f"Scout brain in place: {len(manifest)} files copied+verified.")
 
 
 def step_models(log):
-    # Main model TODO stays: copy Qwen3.6-35B-A3B from USB — paths
-    # finalized at pull-it-together.
     # VISION MODEL — implemented 2026-10-16 (Shawn: "Make it so").
+    # MAIN MODEL copy is implemented further down in this function
+    # (Phase C) — an earlier comment here claimed it was still a TODO;
+    # removed 2026-10-17 so the comments stop lying about the code.
     # Qwen3-VL-8B-Instruct GGUF + mmproj projector, served by llama.cpp
     # (llama-server --mmproj). NOT Ollama: Ollama has a known crash bug
     # with Qwen3-VL, and this build's stack is llama.cpp (see spec).
@@ -355,6 +479,188 @@ def step_models(log):
                                f"({os.path.getsize(dest_main)} bytes).")
         log(f"Main model in place: {main_name}")
     log("AI models step complete (vision + main verified).")
+
+
+# ── v3 creative bundle ────────────────────────────────────────────
+# usb-prep v3 stages the creative/voice payloads under
+# scout-files/payloads/ (apps/ + models/{video,image,music,stt,tts,
+# upscale}/). Before this step existed the installer never referenced
+# them at all — ComfyUI and ~60GB of models would have sat on the
+# stick unused. This step copies them to canonical homes under
+# ~/scout/models/ (mirroring the USB models/ layout), unpacks ComfyUI
+# to ~/scout/apps/ComfyUI, extracts the Parakeet tarball in place,
+# and symlinks the ComfyUI-consumed files into ComfyUI's own models/
+# tree (one canonical copy on disk; links, not duplicates).
+# Minimum sizes sit just under usb-prep's verified expected bytes —
+# prep already size-verified the downloads; anything missing or
+# truncated here FAILS the step loudly, never a silent skip.
+CREATIVE_PAYLOAD_FILES = [
+    # (path under payloads/, min bytes)
+    ("apps/ComfyUI-v0.41.0.zip", 13_000_000),
+    ("models/video/ltxv-2b-0.9.8-distilled-fp8.safetensors", 4_400_000_000),
+    ("models/video/t5xxl_fp8_e4m3fn_scaled.safetensors", 5_100_000_000),
+    ("models/video/wan2.2-ti2v-5b-fp8.safetensors", 5_200_000_000),
+    ("models/video/umt5_xxl_fp8_e4m3fn_scaled.safetensors", 6_700_000_000),
+    ("models/video/wan2.2_vae.safetensors", 1_400_000_000),
+    ("models/music/ace_step_v1_3.5b.safetensors", 7_600_000_000),
+    ("models/image/sd_xl_base_1.0.safetensors", 6_900_000_000),
+    ("models/image/flux1-dev-fp8.safetensors", 17_200_000_000),
+    ("models/stt/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+     480_000_000),
+    ("models/upscale/RealESRGAN_x4plus.pth", 60_000_000),
+    ("models/upscale/4x-UltraSharp.pth", 60_000_000),
+    ("models/upscale/GFPGANv1.4.pth", 340_000_000),
+]
+CREATIVE_PAYLOAD_TREES = [
+    # (dir under payloads/, [(file, min bytes), ...]) — multi-file
+    # sets that must stay together in their named subfolder.
+    ("models/stt/faster-whisper-large-v3", [
+        ("model.bin", 3_000_000_000), ("config.json", 1_000),
+        ("tokenizer.json", 2_000_000), ("vocabulary.json", 1_000_000)]),
+    ("models/tts/VieNeu-TTS", [
+        ("model.safetensors", 1_100_000_000), ("config.json", 500),
+        ("generation_config.json", 100), ("tokenizer.json", 20_000_000),
+        ("tokenizer_config.json", 10_000_000), ("vocab.json", 2_000_000),
+        ("special_tokens_map.json", 100), ("voices.json", 10_000)]),
+]
+# ComfyUI model-tree links: ComfyUI models/<subdir> gets a symlink to
+# the canonical file at ~/scout/<path>.
+COMFYUI_LINKS = [
+    ("checkpoints", "models/video/ltxv-2b-0.9.8-distilled-fp8.safetensors"),
+    ("checkpoints", "models/video/wan2.2-ti2v-5b-fp8.safetensors"),
+    ("checkpoints", "models/image/sd_xl_base_1.0.safetensors"),
+    ("checkpoints", "models/image/flux1-dev-fp8.safetensors"),
+    ("checkpoints", "models/music/ace_step_v1_3.5b.safetensors"),
+    ("text_encoders", "models/video/t5xxl_fp8_e4m3fn_scaled.safetensors"),
+    ("text_encoders", "models/video/umt5_xxl_fp8_e4m3fn_scaled.safetensors"),
+    ("vae", "models/video/wan2.2_vae.safetensors"),
+    ("upscale_models", "models/upscale/RealESRGAN_x4plus.pth"),
+    ("upscale_models", "models/upscale/4x-UltraSharp.pth"),
+    ("upscale_models", "models/upscale/GFPGANv1.4.pth"),
+]
+
+
+def _require_payload(payloads_root, rel, min_size):
+    """Verify one expected payload exists at a sane size; return its
+    path. Missing/truncated = loud failure, never a silent skip."""
+    path = os.path.join(payloads_root, rel)
+    if not os.path.isfile(path):
+        raise RuntimeError(
+            f"Creative bundle payload MISSING on USB: payloads/{rel}\n"
+            "usb-prep v3 must stage the full creative bundle first.")
+    size = os.path.getsize(path)
+    if size < min_size:
+        raise RuntimeError(
+            f"Creative bundle payload too small: payloads/{rel} "
+            f"({size} bytes, expected >= {min_size}).")
+    return path
+
+
+def _link_into(link_path, target, log):
+    """Symlink link_path -> target and verify the link resolves.
+    Re-runs are idempotent; a real file in the way is never clobbered."""
+    os.makedirs(os.path.dirname(link_path), exist_ok=True)
+    if os.path.islink(link_path):
+        if os.path.realpath(link_path) == os.path.realpath(target):
+            log(f"Link already in place: {link_path}")
+            return
+        os.unlink(link_path)
+    elif os.path.exists(link_path):
+        raise RuntimeError(
+            f"Refusing to replace a real file with a link: {link_path}")
+    os.symlink(target, link_path)
+    if not os.path.exists(link_path):
+        raise RuntimeError(
+            f"Link does not resolve: {link_path} -> {target}")
+    log(f"Linked: {link_path} -> {target}")
+
+
+def step_creative_bundle(log):
+    # v3 creative bundle wiring (2026-10-17). Every expected payload
+    # is verified BEFORE anything is copied, so a short stick fails
+    # fast instead of half-installing.
+    home = os.path.expanduser("~")
+    scout = os.path.join(home, "scout")
+    tree = find_usb_dir(log, "scout-files")
+    payloads = os.path.join(tree, "payloads")
+    if not os.path.isdir(payloads):
+        raise RuntimeError(
+            f"No payloads/ folder in the USB scout-files tree "
+            f"({tree}) — usb-prep v3 stages the creative bundle there.")
+    for rel, min_size in CREATIVE_PAYLOAD_FILES:
+        _require_payload(payloads, rel, min_size)
+    for tree_rel, members in CREATIVE_PAYLOAD_TREES:
+        for fname, min_size in members:
+            _require_payload(
+                payloads, os.path.join(tree_rel, fname), min_size)
+    log(f"Creative bundle verified on USB: "
+        f"{len(CREATIVE_PAYLOAD_FILES)} files + "
+        f"{len(CREATIVE_PAYLOAD_TREES)} model sets.")
+    # Single model files -> canonical homes under ~/scout/models/.
+    for rel, _min_size in CREATIVE_PAYLOAD_FILES:
+        if not rel.startswith("models/"):
+            continue  # the ComfyUI zip is unpacked below, not copied
+        src = os.path.join(payloads, rel)
+        dest = os.path.join(scout, rel)
+        if (os.path.exists(dest) and
+                os.path.getsize(dest) == os.path.getsize(src)):
+            log(f"Creative payload already in place: {rel}")
+            continue
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        log(f"Copying creative payload {rel} from USB…")
+        shutil.copy2(src, dest)
+        if os.path.getsize(dest) != os.path.getsize(src):
+            raise RuntimeError(f"Copied {rel} size mismatch.")
+    # Multi-file sets copied as trees (their files stay together).
+    for tree_rel, _members in CREATIVE_PAYLOAD_TREES:
+        manifest = copy_tree_verified(payloads, scout, log,
+                                      subdir=tree_rel)
+        if not manifest:
+            raise RuntimeError(
+                f"Creative model set copied NOTHING: {tree_rel}")
+    # Parakeet tarball: extract in place under models/stt/.
+    stt_dir = os.path.join(scout, "models", "stt")
+    os.makedirs(stt_dir, exist_ok=True)
+    parakeet_dir = os.path.join(
+        stt_dir, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")
+    if not (os.path.isdir(parakeet_dir) and any(
+            f.endswith(".onnx") for f in os.listdir(parakeet_dir))):
+        tar_path = os.path.join(
+            payloads, "models", "stt",
+            "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2")
+        log("Extracting Parakeet STT tarball…")
+        with tarfile.open(tar_path, "r:bz2") as tf:
+            tf.extractall(stt_dir, filter="data")
+    if not (os.path.isdir(parakeet_dir) and any(
+            f.endswith(".onnx") for f in os.listdir(parakeet_dir))):
+        raise RuntimeError(
+            "Parakeet extraction produced no model folder with .onnx "
+            f"files at {parakeet_dir}.")
+    log(f"Parakeet STT in place: {parakeet_dir}")
+    # ComfyUI: unpack payloads/apps/ zip -> ~/scout/apps/ComfyUI.
+    comfy_root = os.path.join(scout, "apps", "ComfyUI")
+    if not os.path.isfile(os.path.join(comfy_root, "main.py")):
+        apps_dir = os.path.join(scout, "apps")
+        os.makedirs(apps_dir, exist_ok=True)
+        zip_path = os.path.join(payloads, "apps", "ComfyUI-v0.41.0.zip")
+        log("Unpacking ComfyUI…")
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(apps_dir)
+        extracted = os.path.join(apps_dir, "ComfyUI-0.41.0")
+        if os.path.isdir(extracted) and not os.path.isdir(comfy_root):
+            os.rename(extracted, comfy_root)
+    if not os.path.isfile(os.path.join(comfy_root, "main.py")):
+        raise RuntimeError(
+            f"ComfyUI unpack did not produce {comfy_root}/main.py.")
+    log(f"ComfyUI in place: {comfy_root}")
+    # Link the ComfyUI-consumed models into ComfyUI's models/ tree.
+    for subdir, canonical_rel in COMFYUI_LINKS:
+        _link_into(
+            os.path.join(comfy_root, "models", subdir,
+                         os.path.basename(canonical_rel)),
+            os.path.join(scout, canonical_rel), log)
+    log("Creative bundle step complete (ComfyUI unpacked, models "
+        "in place + linked).")
 
 
 # ── Knowledge libraries ───────────────────────────────────────────
@@ -465,21 +771,41 @@ def step_downloads(log):
 def step_services(log):
     # Phase C: GENERATE systemd unit files (artifacts) and, when run on
     # the target with root, install+enable them. Generation is fully
-    # off-device; enablement is NEEDS-LAPTOP (marked, not faked).
+    # off-device.
+    # DRY-RUN AUDIT FIX (2026-10-17): this step used to return normally
+    # — GUI green "done" — even when it had ONLY generated files: the
+    # non-root path installed and enabled nothing, and even the root
+    # path never ran `systemctl enable`, yet the installer still ended
+    # with "Install complete". Now: the root path copies + daemon-
+    # reloads + enables + verifies each unit; the non-root path logs
+    # PLANNED ONLY and FAILS the step instead of painting it green.
     out_dir = generate_systemd_units(log=log)
     log(f"Systemd units generated under {out_dir}")
+    units = sorted(f for f in os.listdir(out_dir)
+                   if f.endswith(".service"))
     if os.geteuid() == 0 and os.path.isdir("/etc/systemd/system"):
-        for unit in sorted(os.listdir(out_dir)):
-            if unit.endswith(".service"):
-                shutil.copy2(os.path.join(out_dir, unit),
-                             os.path.join("/etc/systemd/system", unit))
+        for unit in units:
+            shutil.copy2(os.path.join(out_dir, unit),
+                         os.path.join("/etc/systemd/system", unit))
         run("systemctl daemon-reload", log)
-        log("Units installed + daemon reloaded (enable on first boot "
-            "check — NEEDS-LAPTOP verification).")
+        for unit in units:
+            run(f"systemctl enable {unit}", log)
+            rc, out = _capture(f"systemctl is-enabled {unit}")
+            if out.strip() != "enabled":
+                raise RuntimeError(
+                    f"Service {unit} copied but NOT enabled "
+                    f"(is-enabled says: {out.strip() or 'no output'}).")
+        log(f"Services installed + enabled + verified: "
+            f"{', '.join(units)}")
     else:
-        log("NEEDS-LAPTOP: not root / no systemd here — units generated "
-            "only. On the ThinkPad: copy thinkpad/systemd/*.service to "
-            "/etc/systemd/system/, systemctl daemon-reload, enable each.")
+        raise RuntimeError(
+            "Services NOT installed — PLANNED ONLY: unit files were "
+            f"generated under {out_dir}, but this run is not root (or "
+            "has no /etc/systemd/system), so nothing was copied or "
+            "enabled and this step must not show as done. Re-run the "
+            "installer as root, or by hand: copy the units to "
+            "/etc/systemd/system/, systemctl daemon-reload, then "
+            "systemctl enable each one.")
 
 
 def step_self_test(log):
@@ -504,6 +830,8 @@ def step_self_test(log):
 import hashlib
 import json as _json
 import socket as _socket
+import tarfile
+import zipfile
 
 MAIN_MODEL_FILE = ("Qwen3.6-35B-A3B-Q3.gguf", 15_000_000_000)
 OFFLINE_DATA_FILES = [
@@ -572,14 +900,20 @@ def find_file_on_usb(fname, log):
     return None
 
 
-def copy_tree_verified(src_root, dest_root, log, subdir=None):
+def copy_tree_verified(src_root, dest_root, log, subdir=None,
+                       exclude=()):
     """Copy a tree file-by-file, verifying size after each copy.
     Returns a manifest list of {path, size, sha256} (sha256 only for
     files < 200MB — hashing 20GB models at install time is wasteful;
-    size + load-test is the check there)."""
+    size + load-test is the check there). `exclude` names top-level
+    subdirectories of the copied tree to skip entirely (used by
+    step_scout_files for payloads/ + knowledge/, which have their
+    own dedicated copy steps)."""
     base = os.path.join(src_root, subdir) if subdir else src_root
     manifest = []
     for dirpath, _dirs, files in os.walk(base):
+        if not subdir and os.path.abspath(dirpath) == os.path.abspath(base):
+            _dirs[:] = [d for d in _dirs if d not in exclude]
         for fname in files:
             src = os.path.join(dirpath, fname)
             rel = os.path.relpath(src, src_root)
@@ -735,9 +1069,12 @@ def self_test():
         check("brain copy: sha256 recorded for small files",
               all("sha256" in e for e in manifest))
         mp = write_manifest(dest, manifest, lambda m: None)
+        # Real assertion — this check used to end in `or True`, so it
+        # could never fail (fixed in the 2026-10-17 dry-run audit).
+        parsed_paths = {e["path"] for e in _json.load(open(mp))["files"]}
         check("manifest written + parses",
-              _json.load(open(mp))["files"][0]["path"].endswith("talk.py")
-              or True)
+              parsed_paths == {"talk.py", os.path.join("sub", "cfg.json")},
+              str(parsed_paths))
         check("port probe runs", isinstance(_port_free(59999), bool))
     print("installer self_test:", "ALL PASS" if ok_all else "FAILURES PRESENT")
     return ok_all
